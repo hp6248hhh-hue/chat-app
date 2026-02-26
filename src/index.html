@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Community App Full Version</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body class="bg-slate-100">
+    <div id="root"></div>
+
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, onSnapshot, serverTimestamp, doc, updateDoc, arrayUnion, arrayRemove, deleteDoc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyAUNv_LB9vmv0otd1a9f5xxf49Cj7RiWbM",
+            authDomain: "chating-fd863.firebaseapp.com",
+            projectId: "chating-fd863",
+            storageBucket: "chating-fd863.firebasestorage.app",
+            messagingSenderId: "533219040597",
+            appId: "1:533219040597:web:87e4a2269bb122bc8523dc",
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const appId = "chating-fd863";
+
+        window.FirebaseSDK = { auth, db, appId, collection, addDoc, onSnapshot, serverTimestamp, doc, updateDoc, arrayUnion, arrayRemove, deleteDoc, setDoc, getDoc, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged };
+    </script>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        const { auth, db, appId, collection, addDoc, onSnapshot, serverTimestamp, doc, updateDoc, arrayUnion, arrayRemove, deleteDoc, setDoc, getDoc, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged } = window.FirebaseSDK;
+
+        const Icon = ({ name, size = 18, className = "" }) => {
+            const iconRef = useRef(null);
+            useEffect(() => {
+                if (iconRef.current) {
+                    lucide.createIcons({ attrs: { 'stroke-width': 2, size, class: className }, nameMap: { [name]: iconRef.current } });
+                }
+            }, [name]);
+            return <i data-lucide={name} ref={iconRef} className={className}></i>;
+        };
+
+        // 댓글 섹션 컴포넌트
+        function CommentSection({ postId, currentUser, nickname }) {
+            const [comments, setComments] = useState([]);
+            const [input, setInput] = useState('');
+
+            useEffect(() => {
+                const unsub = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'board', postId, 'comments'), (snap) => {
+                    setComments(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0)));
+                });
+                return () => unsub();
+            }, [postId]);
+
+            const addComment = async (e) => {
+                e.preventDefault();
+                if (!input.trim()) return;
+                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'board', postId, 'comments'), {
+                    text: input, author: nickname, uid: currentUser.uid, createdAt: serverTimestamp()
+                });
+                setInput('');
+            };
+
+            return (
+                <div className="mt-4 space-y-2 border-t pt-3">
+                    {comments.map(c => (
+                        <div key={c.id} className="text-xs flex justify-between">
+                            <p><span className="font-bold mr-2">{c.author}</span>{c.text}</p>
+                            {c.uid === currentUser.uid && (
+                                <button onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'board', postId, 'comments', c.id))} className="text-slate-300 hover:text-red-400"><Icon name="x" size={12}/></button>
+                            )}
+                        </div>
+                    ))}
+                    <form onSubmit={addComment} className="flex gap-2 mt-2">
+                        <input type="text" value={input} onChange={e => setInput(e.target.value)} placeholder="댓글 입력..." className="flex-1 bg-slate-50 px-3 py-1 rounded-lg text-xs outline-none focus:ring-1 focus:ring-blue-400" />
+                        <button className="text-blue-600"><Icon name="send" size={14}/></button>
+                    </form>
+                </div>
+            );
+        }
+
+        function App() {
+            const [user, setUser] = useState(null);
+            const [profile, setProfile] = useState({ nickname: '익명' });
+            const [activeTab, setActiveTab] = useState('chat');
+            const [messages, setMessages] = useState([]);
+            const [posts, setPosts] = useState([]);
+            const [places, setPlaces] = useState([]);
+            const [isLoginMode, setIsLoginMode] = useState(true);
+            const [authForm, setAuthForm] = useState({ email: '', password: '', nickname: '' });
+            
+            const [chatInput, setChatInput] = useState('');
+            const [postInput, setPostInput] = useState({ title: '', content: '' });
+
+            useEffect(() => {
+                const unsub = onAuthStateChanged(auth, async (u) => {
+                    if (u) {
+                        setUser(u);
+                        const p = await getDoc(doc(db, 'artifacts', appId, 'users', u.uid, 'profile', 'info'));
+                        if (p.exists()) setProfile(p.data());
+                    } else {
+                        setUser(null);
+                    }
+                });
+                return () => unsub();
+            }, []);
+
+            useEffect(() => {
+                if (!user) return;
+                const u1 = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'messages'), s => setMessages(s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => (a.createdAt?.seconds||0)-(b.createdAt?.seconds||0))));
+                const u2 = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'board'), s => setPosts(s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => (b.createdAt?.seconds||0)-(a.createdAt?.seconds||0))));
+                const u3 = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'places'), s => setPlaces(s.docs.map(d => ({ id: d.id, ...d.data() }))));
+                return () => { u1(); u2(); u3(); };
+            }, [user]);
+
+            const handleAuth = async (e) => {
+                e.preventDefault();
+                try {
+                    if (isLoginMode) {
+                        await signInWithEmailAndPassword(auth, authForm.email, authForm.password);
+                    } else {
+                        const res = await createUserWithEmailAndPassword(auth, authForm.email, authForm.password);
+                        const prof = { nickname: authForm.nickname, email: authForm.email };
+                        await setDoc(doc(db, 'artifacts', appId, 'users', res.user.uid, 'profile', 'info'), prof);
+                        setProfile(prof);
+                    }
+                } catch (err) { alert(err.message); }
+            };
+
+            const sendChat = async (e) => {
+                e.preventDefault();
+                if (!chatInput.trim()) return;
+                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'messages'), { text: chatInput, uid: user.uid, author: profile.nickname, createdAt: serverTimestamp() });
+                setChatInput('');
+            };
+
+            const addPost = async (e) => {
+                e.preventDefault();
+                if (!postInput.title.trim()) return;
+                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'board'), { ...postInput, author: profile.nickname, uid: user.uid, likes: [], createdAt: serverTimestamp() });
+                setPostInput({ title: '', content: '' });
+            };
+
+            const toggleLike = async (postId, currentLikes = []) => {
+                const ref = doc(db, 'artifacts', appId, 'public', 'data', 'board', postId);
+                if (currentLikes.includes(user.uid)) {
+                    await updateDoc(ref, { likes: arrayRemove(user.uid) });
+                } else {
+                    await updateDoc(ref, { likes: arrayUnion(user.uid) });
+                }
+            };
+
+            const addPlace = (e) => {
+                const rect = e.target.getBoundingClientRect();
+                const x = ((e.clientX - rect.left) / rect.width) * 100;
+                const y = ((e.clientY - rect.top) / rect.height) * 100;
+                const name = prompt("장소 이름을 입력하세요:");
+                if (name) addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'places'), { name, x, y, uid: user.uid });
+            };
+
+            if (!user) {
+                return (
+                    <div className="min-h-screen flex items-center justify-center p-4 bg-slate-100">
+                        <div className="bg-white p-8 rounded-3xl shadow-xl w-full max-w-md">
+                            <div className="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center text-white mx-auto mb-6 shadow-lg">
+                                <Icon name="layout-grid" size={32} />
+                            </div>
+                            <h2 className="text-2xl font-bold mb-6 text-center text-slate-800">{isLoginMode ? '로그인' : '회원가입'}</h2>
+                            <form onSubmit={handleAuth} className="space-y-4">
+                                <input type="email" placeholder="이메일" className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-blue-500 transition-all" onChange={e => setAuthForm({...authForm, email: e.target.value})} required />
+                                <input type="password" placeholder="비밀번호" className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-blue-500 transition-all" onChange={e => setAuthForm({...authForm, password: e.target.value})} required />
+                                {!isLoginMode && <input type="text" placeholder="닉네임" className="w-full p-3 border rounded-xl outline-none focus:ring-2 focus:ring-blue-500 transition-all" onChange={e => setAuthForm({...authForm, nickname: e.target.value})} />}
+                                <button className="w-full bg-blue-600 text-white py-3.5 rounded-xl font-bold hover:bg-blue-700 transition-all shadow-lg active:scale-95">{isLoginMode ? '로그인' : '가입하기'}</button>
+                            </form>
+                            <button onClick={() => setIsLoginMode(!isLoginMode)} className="w-full mt-6 text-sm text-blue-600 font-medium">{isLoginMode ? '신규 가입' : '기존 계정으로 로그인'}</button>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="max-w-md mx-auto bg-white min-h-screen shadow-2xl flex flex-col border-x border-slate-100">
+                    <header className="p-4 border-b flex justify-between items-center bg-white sticky top-0 z-20">
+                        <h1 className="font-bold text-blue-600 flex items-center gap-2 text-xl italic"><Icon name="layout-grid" size={24} /> COMMUNITY</h1>
+                        <button onClick={() => signOut(auth)} className="text-slate-400 hover:text-red-500 transition-colors"><Icon name="log-out" /></button>
+                    </header>
+
+                    <nav className="flex bg-slate-50 border-b z-10">
+                        {[
+                            { id: 'chat', icon: 'message-circle', label: '채팅' },
+                            { id: 'board', icon: 'clipboard-list', label: '게시판' },
+                            { id: 'travel', icon: 'map', label: '여행' }
+                        ].map(t => (
+                            <button key={t.id} onClick={() => setActiveTab(t.id)} className={`flex-1 py-3 flex flex-col items-center gap-1 text-[10px] font-bold transition-all ${activeTab === t.id ? 'text-blue-600 bg-white' : 'text-slate-400'}`}>
+                                <Icon name={t.icon} size={20} /> {t.label}
+                            </button>
+                        ))}
+                    </nav>
+
+                    <main className="flex-1 overflow-y-auto hide-scrollbar bg-slate-50/30">
+                        {activeTab === 'chat' && (
+                            <div className="flex flex-col h-full">
+                                <div className="flex-1 p-4 space-y-4">
+                                    {messages.map(m => (
+                                        <div key={m.id} className={`flex flex-col ${m.uid === user.uid ? 'items-end' : 'items-start'}`}>
+                                            <span className="text-[10px] text-slate-400 mb-1 px-1">{m.author}</span>
+                                            <div className={`p-3 px-4 rounded-2xl max-w-[85%] text-sm shadow-sm ${m.uid === user.uid ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-white text-slate-700 border border-slate-100 rounded-tl-none'}`}>
+                                                {m.text}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className="sticky bottom-0 p-4 bg-white border-t">
+                                    <form onSubmit={sendChat} className="flex gap-2">
+                                        <input type="text" value={chatInput} onChange={e => setChatInput(e.target.value)} className="flex-1 bg-slate-100 p-2.5 px-4 rounded-full outline-none text-sm focus:bg-white focus:ring-1 focus:ring-blue-400" placeholder="메시지..." />
+                                        <button className="bg-blue-600 text-white p-2.5 rounded-full hover:bg-blue-700 shadow-md"><Icon name="send" /></button>
+                                    </form>
+                                </div>
+                            </div>
+                        )}
+
+                        {activeTab === 'board' && (
+                            <div className="p-4 space-y-6 pb-20">
+                                <form onSubmit={addPost} className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 space-y-3">
+                                    <input type="text" placeholder="제목" className="w-full font-bold outline-none text-slate-800" value={postInput.title} onChange={e => setPostInput({...postInput, title: e.target.value})} />
+                                    <textarea placeholder="내용을 공유해보세요." className="w-full text-sm outline-none text-slate-600 resize-none h-20" value={postInput.content} onChange={e => setPostInput({...postInput, content: e.target.value})} />
+                                    <button className="w-full bg-blue-600 text-white py-2 rounded-xl text-xs font-bold shadow-md">작성하기</button>
+                                </form>
+
+                                {posts.map(p => (
+                                    <div key={p.id} className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
+                                        <div className="flex justify-between items-start mb-2">
+                                            <h3 className="font-bold text-slate-800">{p.title}</h3>
+                                            {p.uid === user.uid && <button onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'board', p.id))} className="text-slate-300 hover:text-red-400"><Icon name="trash-2" size={16}/></button>}
+                                        </div>
+                                        <p className="text-xs text-slate-400 mb-3">{p.author} • {p.createdAt?.toDate()?.toLocaleDateString()}</p>
+                                        <p className="text-sm text-slate-600 mb-4 whitespace-pre-wrap">{p.content}</p>
+                                        <div className="flex items-center gap-4">
+                                            <button onClick={() => toggleLike(p.id, p.likes)} className={`flex items-center gap-1.5 text-xs font-bold ${p.likes?.includes(user.uid) ? 'text-blue-600' : 'text-slate-400'}`}>
+                                                <Icon name="thumbs-up" size={14} /> {p.likes?.length || 0}
+                                            </button>
+                                        </div>
+                                        <CommentSection postId={p.id} currentUser={user} nickname={profile.nickname} />
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
+                        {activeTab === 'travel' && (
+                            <div className="p-4 space-y-6 h-full">
+                                <div className="relative aspect-video bg-blue-50 rounded-2xl border-2 border-dashed border-blue-200 overflow-hidden cursor-crosshair" onClick={addPlace}>
+                                    <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none opacity-20">
+                                        <Icon name="map" size={48} className="text-blue-900 mb-2" />
+                                        <p className="text-[10px] font-bold uppercase tracking-widest text-blue-900">Click to add favorite places</p>
+                                    </div>
+                                    {places.map(p => (
+                                        <div key={p.id} className="absolute transform -translate-x-1/2 -translate-y-full pointer-events-none" style={{ left: `${p.x}%`, top: `${p.y}%` }}>
+                                            <div className="flex flex-col items-center animate-bounce">
+                                                <div className="bg-white px-2 py-0.5 rounded shadow text-[9px] font-bold mb-0.5 border border-blue-100 whitespace-nowrap">{p.name}</div>
+                                                <Icon name="map-pin" size={18} className="text-blue-600" />
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className="grid grid-cols-2 gap-3">
+                                    {places.map(p => (
+                                        <div key={p.id} className="bg-white p-3 rounded-xl border flex justify-between items-center shadow-sm">
+                                            <span className="text-xs font-bold text-slate-700">{p.name}</span>
+                                            {p.uid === user.uid && <button onClick={() => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'places', p.id))} className="text-slate-300 hover:text-red-400"><Icon name="x" size={14}/></button>}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </main>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
